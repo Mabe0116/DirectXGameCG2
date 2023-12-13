@@ -7,6 +7,7 @@
 #include <cassert>
 #include <dxgidebug.h>
 #include <dxcapi.h>
+#include <wrl.h>
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
 #include "externals/imgui/imgui_impl_win32.h"
@@ -34,6 +35,10 @@ struct Transform {
 	Vector3 scale;
 	Vector3 rotate;
 	Vector3 translate;
+};
+
+struct TransformationMatrix {
+	Matrix4x4 WVP;
 };
 
 Matrix4x4 Inverse(const Matrix4x4& m) {
@@ -633,6 +638,30 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	hr = swapChain->GetBuffer(1, IID_PPV_ARGS(&swapChainResorces[1]));
 	assert(SUCCEEDED(hr));
 
+	//関数化
+	D3D12_CPU_DESCRIPTOR_HANDLE GetCPUDescriptorHandle(ID3D12DescriptorHeap* descriptorHeap, uint32_t descriptorSize, uint32_t index)
+	{
+		D3D12_CPU_DESCRIPTOR_HANDLE handleCPU = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+		handleCPU.ptr += (descriptorSize * index);
+		return handleCPU;
+	}
+
+	D3D12_GPU_DESCRIPTOR_HANDLE GetGPUDescriptorHandle(ID3D12DescriptorHeap* descriptorHeap, uint32_t descriptorSize, uint32_t index)
+	{
+		D3D12_GPU_DESCRIPTOR_HANDLE handleGPU = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+		handleGPU.ptr += (descriptorSize * index);
+		return handleGPU;
+	}
+
+	//DescriptorSizeを取得していく
+	const uint32_t desriptorSizeSRV = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	const uint32_t desriptorSizeRTV = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+	const uint32_t desriptorSizeDSV = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+	GetCPUDescriptorHandle(rtvDescriptorHeap, desriptorSizeRTV, 0);
+
+
+
 	//RTVの設定
 	D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
 	rtvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;//出力結果をSRGBに変換して書き込む
@@ -671,6 +700,18 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	hr = dxcUtils->CreateDefaultIncludeHandler(&includeHandler);
 	assert(SUCCEEDED(hr));
 
+	//SRVの作成
+	D3D12_SHADER_RESOURCE_VIEW_DESC instancingSrvDesc{};
+	instancingSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+	instancingSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	instancingSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+	instancingSrvDesc.Buffer.FirstElement = 0;
+	instancingSrvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+	instancingSrvDesc.Buffer.NumElements = kNumInstance;
+	instancingSrvDesc.Buffer.StructureByteStride = sizeof(TransformationMatrix);
+	D3D12_CPU_DESCRIPTOR_HANDLE instancingSrvHandleCPU = GetCPUDescriptorHandle(srvDescriptorHeap, desriptorSizeSRV, 3);
+	D3D12_GPU_DESCRIPTOR_HANDLE instancingSrvHandleGPU = GetGPUDescriptorHandle(srvDescriptorHeap, desriptorSizeSRV, 3);
+	device->CreateShaderResourceView(instancingResource.Get(), &instancingSrvDesc,instancingSrvHandleCPU)
 
 
 	//RootSignature作成
@@ -678,17 +719,52 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	descriptionRootSignature.Flags =
 		D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
+	//Transformの作成と書き込み
+	Transform transforms[kNumInstance];
+	for (uint32_t index = 0; index < kNumInstance; ++index) {
+		transforms[index].scale = { 1.0f,1.0f,1.0f };
+		transforms[index].rotate = { 0.0f,0.0f,0.0f };
+		transforms[index].translate = { index * 0.1f,index * 0.1f };
+	}
+
+	for (uint32_t index = 0; index < kNumInstance; ++index) {
+		Matrix4x4 worldMatrix =
+			MakeAffineMatrix(transforms[index].scale, transforms[index].rotate, transforms[index].translate);
+
+		Matrix4x4 worldViewProjectionMatrix = Multiply(worldMatrix, viewProjectionMatrix);
+		instancingData[index].WVP = worldViewProjectionMatrix;
+		instancingData[index].World = worldMatrix;
+	}
+
+	Matrix4x4 cameraMatrix = MakeAffineMatrix({ 1.0f,1.0f,1.0f }, { 0.0f,0.0f,0.0f }, {
+		0.0f,1.0f,-10.0f });
+	Matrix4x4 viewMatrix = Inverse(cameraMatrix);
+	Matrix4x4 projectionMatrix = MakePerspectiveFovMatrix(0.45f, 1280.0f / 720.0f, 0.1f,
+		1000.0f);
+	Matrix4x4 viewProjectionMatrix = Multiply(viewMatrix, projectionMatrix);
+
+	//Instancing用のSRVを正しく設定して描画する
+	commandList->SetGraphicsRootDescriptorTable(1, instancingSrvHandleGPU);
+
+	commandList->DrawInstanced(6, kNumInstance, 0, 0);
+
 	//RootParameter作成。複数設定できるので配列。
 	D3D12_ROOT_PARAMETER rootParameters[2] = {};
 	rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 	rootParameters[0].Descriptor.ShaderRegister = 0;
-	rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+	rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
 	rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 	rootParameters[1].Descriptor.ShaderRegister = 0;
 	descriptionRootSignature.pParameters = rootParameters;
 	descriptionRootSignature.NumParameters = _countof(rootParameters);
 
+	D3D12_DESCRIPTOR_RANGE descriptorRangeForInstancing[1] = {};
+	descriptorRangeForInstancing[0].BaseShaderRegister = 0;
+	descriptorRangeForInstancing[0].NumDescriptors = 1;
+	descriptorRangeForInstancing[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	descriptorRangeForInstancing[0].OffsetInDescriptorsFromTableStart =
+	D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
 	//シリアライズしてバイナリにする
 	ID3DBlob* signatureBlob = nullptr;
@@ -729,6 +805,19 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	//三角形の中を塗りつぶす
 	rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
 
+	const uint32_t kNumInstance = 10;
+	//Instancing用のTransformationMatrixリソースを作る
+	Microsoft::WRL::ComPtr<ID3D12Resource> instancingResource =
+		CreateBufferResource(device, sizeof(TransformationMatrix) * kNumInstance);
+	//書き込みためのアドレスを取得
+	TransformationMatrix* instancingData = nullptr;
+	instancingResource->Map(0, nullptr, reinterpret_cast<void**>(&instancingData));
+	//単位行列を書き込んでいく
+	for (uint32_t index = 0; index < kNumInstance; ++index) {
+		instancingData[index].WVP = MakeIdentity4x4();
+		instancingData[index].World = MakeIdentity4x4();
+	}
+
 	//Shaderをコンパイルする
 	IDxcBlob* vertexShaderBlob = CompileShader(L"Particle.VS.hlsl",
 		L"vs_6_0", dxcUtils, dxcCompiler, includeHandler);
@@ -762,49 +851,49 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 		IID_PPV_ARGS(&graphicsPipelineState));
 	assert(SUCCEEDED(hr));
 
-	//球体用頂点
-	const float kPi = std::numbers::pi_v<float>;
-	const float kLonEvery = (2 * kPi) / flaot(kSubdivision);//経度分割1つ分の角度
-	const float Every = kPi / float(kSubdivision);//経度分割1つ分の角度
-	for (uint32_t latIndex = 0; latIndex < kSubdivision; ++latIndex) {
-		float lat = -kPi / 2.0f + kLatEvery * latIndex;
-		for (uint32_t lonIndex = 0; lonIndex < kSubdivision; ++lonIndex) {
-			uint32_t start = (latIndex * kSubdivision + lonIndex) * 6;
-			flaot lon = lonIndex * kLonEvery;
-			//a
-			vertexData[start].position.x = cos(lat) * cos(lon);
-			vertexData[start].position.y = sin(lat);
-			vertexData[start].position.z = cos(lat) * sin(lon);
-			vertexData[start].position.w = 1.0f;
-			vertexData[start].texcoord.x = flaot(lonIndex) / float(kSubdivision);
-			vertexData[start].texcoord.y = 1.0 - flaot(latIndex) / float(kSubdivision);
-			//b
-			vertexData[start + 1].position.x = cos(lat + kLatEvery) * cos(lon);
-			vertexData[start + 1].position.y = sin(lat + kLatEvery);
-			vertexData[start + 1].position.z = cos(lat + kLatEvery) * sin(lon);
-			vertexData[start + 1].position.w = 1.0f;
-			vertexData[start + 1].texcoord.x = float(lonIndex) / float(kSubdivision);
-			vertexData[start + 1].texcoord.y = 1.0 - float(latIndex + 1) / float(kSubdivision);
-			//c
-			vertexData[start + 2].position.x = cos(lat) * cos(lon + kLonEvery);
-			vertexData[start + 2].position.y = sin(lat);
-			vertexData[start + 2].position.z = cos(lat) * sin(lon + kLonEvery);
-			vertexData[start + 2].position.w = 1.0f;
-			vertexData[start + 2].position.x = float(lonIndex + 1) / float(kSubdivision);
-			vertexData[start + 2].position.y = 1.0 - float(latIndex) / float(kSubdivision);
-			//c
-			vertexData[start + 3] = vertexData[start + 2];
-			//b
-			vertexData[start + 4] = vertexData[start + 1];
-			//d
-			vertexData[start + 5].position.x = cos(lat + kLatEvery) * cos(lon + kLonEvery) * cos(lon + kLonEvery);
-			vertexData[start + 5].position.y = sin(lat + kLatEvery);
-			vertexData[start + 5].position.z = cos(lat + kLatEvery) * sin(lon + kLonEvery) * sin(lon + kLonEvery);
-			vertexData[start + 5].position.w = 1.0f;
-			vertexData[start + 5].texcoord.x = float(lonIndex + 1) / float(kSubdivision);
-			vertexData[start + 5].texcoord.y = 1.0 - float(latIndex + 1) / float(kSubdivision);
-		}
-	}
+	////球体用頂点
+	//const float kPi = std::numbers::pi_v<float>;
+	//const float kLonEvery = (2 * kPi) / flaot(kSubdivision);//経度分割1つ分の角度
+	//const float Every = kPi / float(kSubdivision);//経度分割1つ分の角度
+	//for (uint32_t latIndex = 0; latIndex < kSubdivision; ++latIndex) {
+	//	float lat = -kPi / 2.0f + kLatEvery * latIndex;
+	//	for (uint32_t lonIndex = 0; lonIndex < kSubdivision; ++lonIndex) {
+	//		uint32_t start = (latIndex * kSubdivision + lonIndex) * 6;
+	//		flaot lon = lonIndex * kLonEvery;
+	//		//a
+	//		vertexData[start].position.x = cos(lat) * cos(lon);
+	//		vertexData[start].position.y = sin(lat);
+	//		vertexData[start].position.z = cos(lat) * sin(lon);
+	//		vertexData[start].position.w = 1.0f;
+	//		vertexData[start].texcoord.x = flaot(lonIndex) / float(kSubdivision);
+	//		vertexData[start].texcoord.y = 1.0 - flaot(latIndex) / float(kSubdivision);
+	//		//b
+	//		vertexData[start + 1].position.x = cos(lat + kLatEvery) * cos(lon);
+	//		vertexData[start + 1].position.y = sin(lat + kLatEvery);
+	//		vertexData[start + 1].position.z = cos(lat + kLatEvery) * sin(lon);
+	//		vertexData[start + 1].position.w = 1.0f;
+	//		vertexData[start + 1].texcoord.x = float(lonIndex) / float(kSubdivision);
+	//		vertexData[start + 1].texcoord.y = 1.0 - float(latIndex + 1) / float(kSubdivision);
+	//		//c
+	//		vertexData[start + 2].position.x = cos(lat) * cos(lon + kLonEvery);
+	//		vertexData[start + 2].position.y = sin(lat);
+	//		vertexData[start + 2].position.z = cos(lat) * sin(lon + kLonEvery);
+	//		vertexData[start + 2].position.w = 1.0f;
+	//		vertexData[start + 2].position.x = float(lonIndex + 1) / float(kSubdivision);
+	//		vertexData[start + 2].position.y = 1.0 - float(latIndex) / float(kSubdivision);
+	//		//c
+	//		vertexData[start + 3] = vertexData[start + 2];
+	//		//b
+	//		vertexData[start + 4] = vertexData[start + 1];
+	//		//d
+	//		vertexData[start + 5].position.x = cos(lat + kLatEvery) * cos(lon + kLonEvery) * cos(lon + kLonEvery);
+	//		vertexData[start + 5].position.y = sin(lat + kLatEvery);
+	//		vertexData[start + 5].position.z = cos(lat + kLatEvery) * sin(lon + kLonEvery) * sin(lon + kLonEvery);
+	//		vertexData[start + 5].position.w = 1.0f;
+	//		vertexData[start + 5].texcoord.x = float(lonIndex + 1) / float(kSubdivision);
+	//		vertexData[start + 5].texcoord.y = 1.0 - float(latIndex + 1) / float(kSubdivision);
+	//	}
+	//}
 
 	//頂点リソース用のヒープの設定
 	ID3D12Resource* vertexResource = CreateBufferResource(device, sizeof(Vector4) * 3);
