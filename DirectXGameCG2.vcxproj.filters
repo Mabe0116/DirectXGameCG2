@@ -80,5 +80,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Object3d.hlsli" />
+    <None Include="Particle.hlsli" />
+    <None Include="Particle.PS.hlsli" />
+    <None Include="Particle.VS.hlsli" />
   </ItemGroup>
 </Project>

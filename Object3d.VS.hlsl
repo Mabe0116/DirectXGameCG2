@@ -15,6 +15,97 @@ VertexShaderOutput main(VertexShaderInput input) {
 	return output;
 }
 
+////4_0
+//
+//uint32_t startIndex = (latIndex * kSubdivision + lonIndex) = 6;
+//
+//u = float(lonIndex) / float(kSubdivision);
+//
+//v = 1.0f - float(latIndex) / float(kSubdivision);
+//
+//経度分割１つ分の角度
+//const float kLonEvery = pi * 2.0f / float(kSubdivision);
+//
+//const float kLatEvery = pi / float(kSubdivision);
+//
+//緯度の方向に分割
+//for (latIndex = 0; latIndex < kSubdivision; ++latIndex) {
+//	float lat = -pi / 2.0f + kLatEvery * latIndex;
+//
+//	for (lonIndex = 0; lonIndex < kSubdivision; ++lonIndex) {
+//		uint32_t start = (latIndex * kSubdivision + lonIndex) * 6;
+//		float lon = lonIndex * kLonEvery;
+//		頂点データを入力する。基準点a
+//		vertexData[start].position.x = cos(lat) * cos(lon);
+//		vertexData[start].position.y = sin(lat);
+//		vertexData[start].position.z = cos(lat) * sin(lon);
+//		vertexData[start].position.w = 1.0f;
+//		vertexData[start].texcoord = ;
+//	}
+//}
+//
+//commandList->DrawInstanced(球の頂点, 1, 0, 0);
+
+////1_00
+//
+//for (100) {
+//	commandList->SetGraphocsRootConstantBufferView(粒ごとのTransformのCSV)
+//		commandList->DrawInstance(...);
+//}
+//
+//commnadList->DrawInstanced(UINT(modelData.vertices.size()), instanceCount 0, 0);
+//
+//TransformationMatrix gTransformationMatrices[10];
+//
+//StructuredBuffer<TransformationMatrix>gTransformationMatrix : register(t0);
+//
+//VertexShaderOutput main(VertexShaderInput input, uint32_t instanceId : SV_InstanceID)
+//
+//output.position = mul(input.position, gTransformationMatrices[instanceId].WVP);
+//
+//output.texcoord = input.texcoord;
+//
+//output.normal = normalize(mul(input.normal, (float32_t3x3)gTransformationMatrices[instanceId].World));
+//
+//D3D12_DESCRIPTOR_RANGE descriptorRangeForInstancing[1] = {};
+//descriptorRangeForInstancing[0].BaseShaderRegister = 0;
+//descriptorRangeForInstancing[0].NumDescriptors = 1;
+//descriptorRangeForInstancing[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+//descriptorRangeForInstancing[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+//
+//rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+//rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+//rootParameters[1].pDescriptorRanges = descriptorRangeForInstancing;
+//rootParameters[1].NumDescriptorRanges = _countof(descriptorRangeForInstancing);
+//
+//PixelShaderOutput output;
+//float32_t4 textureColor = gTexture.Sample(gSampler, transformedUV.xy);
+//output.color = gMaterial.color * textureColor;
+//if (output.color.a == 0.0) {
+//	discard;
+//}
+//output.color = gMaterial.color * textureColor;
+//return output;
+//
+//const uint32_t kNumInstance = 10;
+//
+//Microsoft::WRL::ComPtr<ID3D12Resource> instancingResource =
+//CreateBufferResource(device, sizeof(TransformationMatrix) * kNumInstance);
+//
+//TransformationMatrix* instancingData = nullptr;
+//instancingResource->Map(0, nullptr, reinterpret_cast<void**>(&instancingData));
+//
+//for (uint32_t index = 0; index < kNumInstance; ++index) {
+//	instancingData[index].WVP = 
+//}
+
+
+
+
+
+
+
+
 ////2_04
 //
 //CoInitializeEx(0, COINIT_MULTITHREADED);
